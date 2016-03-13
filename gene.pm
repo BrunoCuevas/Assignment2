@@ -3,15 +3,23 @@ use Moose;
 use LWP::Simple;
 has 'KEGG_ID' => (
 	is => 'rw',
-	isa => 'Str'
+	isa => 'Str',
+	required => 0
 );
 has 'UNIPROT_ID' => (
 	is => 'rw',
-	isa => 'Str'
+	isa => 'Str',
 );
 has 'SEQ' => (
 	is => 'rw',
 	isa => 'Str',
+	required => 0
+);
+has 'PATHWAY' => (
+	is => 'rw',
+	isa => 'ArrayRef[KEGG_Pathway]',
+	required => 0
+
 );
 sub return_uniprot {
 	my ($self) = @_;
@@ -27,4 +35,12 @@ sub return_fasta {
 		$fasta = '>'.$self->UNIPROT_ID."\n".$self->SEQ;
 	return $fasta;
 }
+
+# sub add_interaction {
+# 	my ($self, $gene) = @_ ;
+# 	my @interacts = @{$self -> InteractsWith};
+# 	push(@interacts, $gene)
+# 		or die "ERROR : Not able to input new gene";
+# 	$self->InteractsWith(\@interacts);
+# }
 1;
