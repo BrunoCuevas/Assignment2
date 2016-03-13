@@ -7,6 +7,7 @@ use LWP::Simple;
 use gene;
 use JSON;
 use network;
+use Data::Dumper qw(Dumper);
 has 'genes' => (
 	is => 'rw',
 	isa => 'HashRef[gene]',
@@ -20,16 +21,55 @@ has 'number_of_networks' => (
 	is => 'rw',
 	isa => 'Int'
 );
-
-sub input_genes_from_kegg {
-
+sub record_gene_info {
 	if (@_) {
+		my ($self, $filein) = @_ ;
+		if (open FILE, ">$filein") {
+			print "File opened";
+			print FILE "UNIPROT\tKEGG\n";
+			foreach my $line (sort keys %{$self->genes}) {
+				print FILE $self->genes->{$line}->return_uniprot, "\t";
+				print FILE $self->genes->{$line}->return_keggid, "\n";
+			}
+
+		} else {
+			die "ERROR : Couldn't get 2 file\n";
+		}
+	}
+}
+sub open_gen_info {
+	if (@_) {
+		my ($self, $filein) = @_;
+		if (open FILE, $filein) {
+			my @file = <FILE>;
+			my %gene_hash	;
+			print "getting information from $filein\n";
+			foreach my $line (@file) {
+				my ($uniprot_id, $kegg_id) = split("\t", $line);
+				$gene_hash{$uniprot_id} = gene -> new(
+					'UNIPROT_ID' => $uniprot_id,
+					'KEGG_ID' => $kegg_id
+				);
+			}
+			$self -> genes(\%gene_hash);
+		}
+	}
+}
+sub input_genes_from_kegg {
+	#
+	#	This function allows us to create gene instances inside our gene
+	#	library, which will be used for develeoping gene-interaction
+	#	networks.
+	#
+	if (@_) {
+		#
+		#	input genes loads KEGG Identifiersfrom file, and looks for
+		#	it through KEGG Rest Interface.
+		#
 		my ($self, $path) = @_;
 		if ($path) {
 			if (open(INFILE, $path)) {
-				#
-				#
-				#
+				print "Reading information from KEGG-identifiers file\n";
 				my $page					;
 				my @kegg_file = <INFILE> 	;
 				my $json = JSON->new		;
@@ -48,7 +88,7 @@ sub input_genes_from_kegg {
 					my @kegg_pathway_object_array;
 					$iter ++;
 					chomp($keggref);
-					print "[$iter]\tworking in $keggref\n";
+					print "[$iter]\tworking in : fetching information for $keggref\n";
 					$page = get ('http://togows.dbcls.jp/entry/genes/ath:'.$keggref.'/dblinks.json')
 						or next;
 					$ref_content	=	$json->decode($page);
@@ -62,7 +102,7 @@ sub input_genes_from_kegg {
 						or next;
 					$ref_content	=	$json->decode($page);
 					$refs			=	$ref_content -> [0];
-					foreach my $kegg_accesion (keys $refs) {
+					foreach my $kegg_accesion (keys %{$refs}) {
 						#
 						#
 						#
@@ -70,7 +110,7 @@ sub input_genes_from_kegg {
 								'KEGG_id' => $kegg_accesion,
 								'KEGG_name' => $refs->{$kegg_accesion}
 							)
-						);
+						) or print "ERROR : Unable to create KEGG anotation for $kegg_accesion\n";
 					}
 
 
@@ -84,6 +124,8 @@ sub input_genes_from_kegg {
 					) or (print $uniprotreff." not avalaible\n" and next);
 				}
 				$self -> genes(\%hashgene) ;
+				print "saving data to gene_information_file.txt\n";
+				$self -> record_gene_info('gene_information_file.txt');
 			}
 		} else {
 			die "ERROR : No path\n";
@@ -123,13 +165,14 @@ sub createnetworks {
 		my $json = JSON -> new;
 		foreach my $gene (sort keys %{$self->genes}) {
 			$interaction_result = $self-> look4interactions ($gene, $deepness);
+			print "working in : looking for interactions involving $gene\n";
 			if (defined $interaction_result) {
 				@interactors = split("\t", $interaction_result);
-				print join ("\t", @interactors), "\n";
+
 				foreach my $interactor (@interactors) {
-					if (exists $self->genes->{$interactor}) {
+					if (not exists $self->genes->{$interactor}) {
 						my %hashgenes;
-						if ($self->genes) {
+						if (%{$self->genes}) {
 							%hashgenes = %{$self->genes};
 						}
 						my $page = get ('http://togows.dbcls.jp/entry/uniprot/'.$interactor.'/seq.json')
@@ -140,93 +183,92 @@ sub createnetworks {
 						$hashgenes{$interactor} = gene-> new(
 							'UNIPROT_ID' => $interactor,
 							'SEQ' => $seq
-						) ;
+						) or die "ERROR : Couldn't create object gene for $interactor\n";
 
 						$self -> genes(\%hashgenes);
 					}
 				}
 				while (scalar(@interactors) > 1) {
 					my $gen1 = shift @interactors ;
-					#print scalar @interactors, "\n";
 					$interactions{$gen1.':'.$interactors[0]} = interaction -> new(
-						'gen1' =>	$gen1,
-						'gen2' =>	$interactors[0],
+						'gene1' =>	$self->genes->{$gen1},
+						'gene2' =>	$self->genes->{$interactors[0]},
 						'id' =>		$gen1.':'.$interactors[0]
-					);
-					print "Interaccion añadida\n";
+					) or last;
 				}
 			}
 		}
-		$self -> joininteractions(\%interactions);
+		$self -> joininteractions(%interactions);
 		foreach my $network (keys %{$self->networks}) {
 			print $self->networks->{$network}->network_id, "\n";
 			foreach my $interaction (keys %{$self->networks->{$network}->interaction}) {
-				print "\t".$self->networks->{$network}->interaction->{$interaction}->id, "\n" ;
+				print "\t",$self->networks->{$network}->interaction->{$interaction}->id, "\n" ;
 			}
 		}
 	}
 }
+
 sub joininteractions {
 
 	my ($self, %interaction_hash) = @_ 	;
+
 	if (%interaction_hash) {
-		print "Geetting into\n";
+		print "working in : identifying possible gene interaction network\n";
+
 		my $door = 1		;
 		my @temp_list = keys(%interaction_hash)		;
 		my $network_tupple = $temp_list[0]			;
 		my %network_final_terms 					;
+
 		$network_final_terms{$network_tupple}	=	$interaction_hash{$network_tupple};
 		delete $interaction_hash{$network_tupple}	;
 		while ($door == 1) {
-			print "In\n";
 			my @network_terms = split(":", $network_tupple)	;
-			print "\t$network_tupple\n";
 			$door = 0;
 			foreach my $current_interaction (sort keys %interaction_hash) {
-				#
-				#
-				#
-				print "\tworking in $current_interaction\n";
-				foreach my $current_term (@network_terms) {
-					my @current_interaction_identifiers = split(":", $current_interaction);
-					print "\t\t\t$current_term\n";
-					if ($current_term eq $current_interaction_identifiers[0]){
-						print "Network expanded. Term = $current_interaction_identifiers[1]\n";
-						$network_tupple = $network_tupple.":".$current_interaction_identifiers[1];
-						$network_final_terms{$current_interaction} = $interaction_hash{$current_interaction};
-						delete $interaction_hash{$current_interaction};
-						$door = 1;
-					} elsif ($current_term eq $current_interaction_identifiers[1]) {
-						print "Network expanded. Term = $current_interaction_identifiers[0]\n";
-						$network_tupple = $network_tupple.":".$current_interaction_identifiers[0];
-						$network_final_terms{$current_interaction} = $interaction_hash{$current_interaction};
-						delete $interaction_hash{$current_interaction};
-						$door = 1;
+
+				if (defined $interaction_hash{$current_interaction}->id) {
+					foreach my $current_term (@network_terms) {
+						my @current_interaction_identifiers = split(":", $current_interaction);
+						if ($current_term eq $current_interaction_identifiers[0]){
+							$network_tupple = $network_tupple.":".$current_interaction_identifiers[1];
+							$network_final_terms{$current_interaction} = $interaction_hash{$current_interaction};
+
+							delete $interaction_hash{$current_interaction};
+							$door = 1;
+						} elsif ($current_term eq $current_interaction_identifiers[1]) {
+							$network_tupple = $network_tupple.":".$current_interaction_identifiers[0];
+							$network_final_terms{$current_interaction} = $interaction_hash{$current_interaction};
+
+							delete $interaction_hash{$current_interaction};
+							$door = 1;
+						}
 					}
+				} else {
+					delete $interaction_hash{$current_interaction};
 				}
 			}
 		}
-		print "NEW NETWORK\n";
+		print "\tnew network found\n";
 		my $iter=0;
 		foreach my $line (sort keys %network_final_terms) {
-			print "[$iter]\t";
-			print $line;
-			print "\n";
-			$iter ++;
+			if (not defined $network_final_terms{$line}) {
+				delete $network_final_terms{$line};
+			}
 		}
 		my %built_networks;
 		if (defined $self->networks) {
-			#print "Coming to preexistent networks\n";
 			%built_networks = %{$self->networks};
 		}
 		my $number			=	$self->number_of_networks + 1;
 		my $network_name	=	"N$number";
 
+		print "\t\twhose name will be $network_name\n";
 		$built_networks{$network_name} = network -> new (
-			'network_id' => $network_name
-			#'interaction' => %network_final_terms
+			'network_id' => $network_name,
+			'interaction' => \%network_final_terms
 		);
-		$built_networks{$network_name} -> interaction(\%built_networks);
+
 		$self -> networks(\%built_networks);
 		$self -> number_of_networks($number);
 		if (%interaction_hash) {
