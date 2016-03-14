@@ -206,13 +206,16 @@ sub createnetworks {
 		my $deepness = 1;
 		my $json = JSON -> new;
 		foreach my $gene (sort keys %{$self->genes}) {
-			$interaction_result = $self-> look4interactions ($gene, $deepness);
 			print "working in : looking for interactions involving $gene\n";
+			$interaction_result = $self-> look4interactions ($gene, $deepness);
 
 			if (defined $interaction_result) {
+				print "\tinteraction found\n";
 				@interactors = split("\t", $interaction_result);
+				print '|'.$interaction_result.'|', "\n";
 				my $error_control = 0;
 				foreach my $interactor (@interactors) {
+
 					if (not exists $self->genes->{$interactor}) {
 						my %hashgenes;
 						if (%{$self->genes}) {
@@ -221,28 +224,30 @@ sub createnetworks {
 						print "\tworking in : adding intermediate node\n";
 						print "\t\tworking in : looking for sequence\n";
 						my $page;
-						unless( $page= get ('http://togows.dbcls.jp/entry/uniprot/'.$interactor.'/seq.json') ) {
+						if (not $page= get ('http://togows.dbcls.jp/entry/uniprot/'.$interactor.'/seq.json') ) {
+							print "ERROR : Couldn't get to sequence\n";
 							$error_control=1;
 							next;
 						}
 						my $ref_content	=	$json->decode($page);
 						my $seq			=	$ref_content->[0];
 						print "\t\tworking in : looking for KEGG id\n";
-						unless ($page = get ('http://togows.dbcls.jp/entry/uniprot/'.$interactor.'/dr.json') ) {
+						if (not $page = get ('http://togows.dbcls.jp/entry/uniprot/'.$interactor.'/dr.json') ) {
 							$error_control=1;
+							print "ERROR : Couldn't get to togo rest interface\n";
 							next;
 						}
 						$ref_content	=	$json->decode($page);
 						my $ref			=	$ref_content->[0];
 						my $keggref;
-						unless ($keggref = $ref->{KEGG}->[0]->[0] ) {
+						if (not $keggref = $ref->{KEGG}->[0]->[0] ) {
 							$error_control=1;
 							print "ERROR : Unable to find KEGG id\n";
 							next;
 						}
 						print "\t\t\tkegg id = $keggref\n";
 						($keggref) and ($keggref =~ s/^ath\://);
-						unless ($page = get('http://togows.dbcls.jp/entry/genes/ath:'.$keggref.'/pathways.json')) {
+						if (not $page = get('http://togows.dbcls.jp/entry/genes/ath:'.$keggref.'/pathways.json')) {
 							$error_control=1;
 							print "ERROR : Unable to fing KEGG pathway id\n";
 							next;
@@ -257,7 +262,7 @@ sub createnetworks {
 								)
 							) or print "ERROR : Unable to create KEGG anotation for $kegg_accesion\n";
 						}
-						unless ($error_control==0) {
+						if ($error_control==0) {
 
 							$hashgenes{$interactor} = gene-> new(
 								'UNIPROT_ID' => $interactor,
@@ -269,7 +274,9 @@ sub createnetworks {
 						}
 					}
 				}
-				unless ($error_control == 0) {
+				print "\t\t\terror control value = $error_control";
+				if ($error_control == 0) {
+
 
 					while (scalar(@interactors) > 1) {
 						my $gen1 = shift @interactors ;
@@ -277,11 +284,15 @@ sub createnetworks {
 							'gene1' =>	$self->genes->{$gen1},
 							'gene2' =>	$self->genes->{$interactors[0]},
 							'id' =>		$gen1.':'.$interactors[0]
-						) or last;
+						) and print "interaction added\n";
 					}
+
+				} else {
+					print "\tinteraction not added.\n";
 				}
 			}
 		}
+
 		$self -> joininteractions(%interactions);
 		if ($self->networks) {
 			foreach my $network (keys %{$self->networks}) {
@@ -366,12 +377,10 @@ sub joininteractions {
 		return;
 	}
 }
-
 sub look4interactions {
 	if (@_) {
 		#
-		#	This method links genes inside the dataset using, if necessary,
-		#	genes not present in the dataset, through recursive calling.
+		#	Recursive Function
 		#
 
 		my ($self, $currentgene, $deepness)	=	@_;
@@ -441,6 +450,80 @@ sub look4interactions {
 		die "ERROR : No information to work with\n";
 	}
 }
+# sub look4interactions {
+# 	if (@_) {
+# 		#
+# 		#	This method links genes inside the dataset using, if necessary,
+# 		#	genes not present in the dataset, through recursive calling.
+# 		#
+#
+# 		my ($self, $currentgene, $deepness)	=	@_;
+#
+# 		if ($deepness == 3) {
+# 			if (exists $self->genes-> {$currentgene}) {
+#
+# 				return $currentgene ;
+# 			} else {
+# 				return	;
+# 			}
+# 		} else {
+# 			my $ebi_url =  'http://www.ebi.ac.uk/';
+# 			my $psicquic_tool_url = 'Tools/webservices/psicquic/intact/webservices/current/search/';
+# 			my $method	=	'interactor/';
+# 			my $format	=	'format=tab27';
+# 			my $rest_url				;
+# 				$rest_url = $rest_url = $ebi_url.
+# 							$psicquic_tool_url.
+# 							$method.
+# 							$currentgene.'?'.
+# 							$format	;
+# 			my $rest_page	=	get($rest_url) or
+# 				return;
+# 			my @interaction_list	;
+# 			my $focusgene			;
+# 			my $recursive_answer	;
+# 			my @instances			;
+# 				@instances	=	split("\n", $rest_page) ;
+# 			my @fields				;
+# 			my $answer				;
+#
+# 			foreach my $inst (@instances) {
+#
+# 				@fields = split("\t", $inst);
+# 				my ($idA, $idB, $altIdA, $altIdB, $aliasA, $aliasB,
+# 				$detMethod, $author, $pub, $orgA, $orgB, $intType,
+# 				$sourceDb, $intId, $conf) = @fields ;
+# 				$idA =~ s/uniprotkb://g;
+# 				$idB =~ s/uniprotkb://g;
+# 				($idA eq $idB)
+# 					and next ;
+# 				($idA  eq $currentgene)
+# 					and ($focusgene = $idB);
+# 				($idB  eq $currentgene)
+# 					and ($focusgene = $idA);
+# 				(defined $focusgene)
+# 					or die "ERROR : Couldn't get focus gene value\n";
+# 				#print $indenter."FOCUS GENE = ",$focusgene, "\n";
+# 				if (exists $self->genes->{$focusgene}) {
+# 					return $currentgene."\t".$focusgene ;
+# 				} else {
+# 					$recursive_answer = $self -> look4interactions ($focusgene, $deepness + 1);
+# 					if (defined $recursive_answer) {
+# 						($recursive_answer =~ m/$currentgene/)
+# 							and next;
+# 						($recursive_answer =~ m/$currentgene/)
+# 							or $answer = $currentgene."\t".$recursive_answer;
+# 						defined $answer
+# 							and return $answer ;
+# 					}
+# 				}
+#
+# 			}
+# 		}
+# 	} else {
+# 		die "ERROR : No information to work with\n";
+# 	}
+# }
 sub report_interactions {
 	#
 	#	Creates a report.
