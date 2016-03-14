@@ -1,6 +1,8 @@
 package gene;
 use Moose;
 use LWP::Simple;
+use go;
+use KEGG_Pathway;
 has 'KEGG_ID' => (
 	is => 'rw',
 	isa => 'Str',
@@ -20,6 +22,10 @@ has 'PATHWAY' => (
 	isa => 'ArrayRef[KEGG_Pathway]',
 	required => 0
 
+);
+has 'GO' => (
+	is => 'rw',
+	isa => 'HashRef[go]'
 );
 sub return_uniprot {
 	my ($self) = @_;

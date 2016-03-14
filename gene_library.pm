@@ -1,13 +1,14 @@
 package gene_library;
-use KEGG_Pathway;
 use Moose;
 use strict;
 use warnings;
+use KEGG_Pathway;
 use LWP::Simple;
 use gene;
 use JSON;
 use network;
 use Data::Dumper qw(Dumper);
+use go;
 has 'genes' => (
 	is => 'rw',
 	isa => 'HashRef[gene]',
@@ -44,6 +45,7 @@ sub open_gen_info {
 			my @file = <FILE>;
 			my %gene_hash	;
 			print "getting information from $filein\n";
+			shift(@file)	;
 			foreach my $line (@file) {
 				my ($uniprot_id, $kegg_id) = split("\t", $line);
 				$gene_hash{$uniprot_id} = gene -> new(
@@ -137,25 +139,65 @@ sub input_genes_from_kegg {
 }
 sub look4goanotation {
 	if (@_) {
+		#
+		#	This function pourpose is to get process antotation
+		#	from the GO
+		#
 		my ($self) = @_ ;
 		my $json = JSON->new;
-		foreach my $netname (keys %{$self -> networks}) {
-			foreach my $interaction_name (keys %{$self->networks->{$netname}}) {
-				my @interaction_terms = split (":",$interaction_name);
-				while (@interaction_terms) {
-					my $page = get ('http://togows.dbcls.jp/entry/uniprot/'.shift(@interaction_terms).'/dr.json');
-					my $ref_content = $json->decode($page);
-					my $refs = $ref_content -> [0] ;
-					foreach my $go_ref (@{$refs->{GO}}) {
-						print $go_ref, "\n";
-					}
-				}
+		if ($self->networks) {
+			print "working in : looking for GO anotation\n";
+			foreach my $netname (keys %{$self -> networks}) {
+				my %go_network_asociated;
+				foreach my $interaction_name (keys %{$self->networks->{$netname}->interaction}) {
 
+					my @interaction_terms = split (":",$interaction_name);
+					while (@interaction_terms) {
+						my %go_gene_asociated;
+						my $current_gene = shift(@interaction_terms);
+						if ($self->genes->{$current_gene}->GO) {
+							%go_gene_asociated = %{$self->genes->{$current_gene}->GO};
+						}
+						print "\tworking in : looking gor GO anotation in $netname:$current_gene\n";
+						my $page = get ('http://togows.dbcls.jp/entry/uniprot/'.$current_gene.'/dr.json');
+						if ($page) {
+							my $ref_content = $json->decode($page);
+							my $refs = $ref_content->[0] ;
+							foreach my $go (@{$refs->{'GO'}}){
+								foreach my $go_entry_ref ($go) {
+									if (exists $go_gene_asociated{$go_entry_ref->[0]}) {
+										next;
+									} else {
+										if ($go_entry_ref->[1] =~ /^P:(.*)/) {
+											print "\t\tadding a new ontology term to network\n";
+											$go_gene_asociated{$go_entry_ref->[0]} = go -> new(
+												'GO_id' => $go_entry_ref->[0],
+												'GO_category' => 'P',
+												'GO_term' => $1
+											);
+											$go_network_asociated{$go_entry_ref->[0]} = $go_gene_asociated{$go_entry_ref->[0]};
+										}
+									}
+								}
+							}
+						}
+						$self->genes->{$current_gene}->GO(\%go_gene_asociated);
+					}
+
+				}
+				$self->networks->{$netname}->go_anotation(\%go_network_asociated);
 			}
+		} else {
+			print "ERROR : No networks\n";
 		}
 	}
 }
 sub createnetworks {
+	#
+	#	This method provides the genes not present in the original
+	#	dataset, and calls the subrutines in charge of linking
+	#	interactions.
+	#
 	if (@_) {
 		my ($self) = @_ ;
 		my $interaction_result;
@@ -166,50 +208,97 @@ sub createnetworks {
 		foreach my $gene (sort keys %{$self->genes}) {
 			$interaction_result = $self-> look4interactions ($gene, $deepness);
 			print "working in : looking for interactions involving $gene\n";
+
 			if (defined $interaction_result) {
 				@interactors = split("\t", $interaction_result);
-
+				my $error_control = 0;
 				foreach my $interactor (@interactors) {
 					if (not exists $self->genes->{$interactor}) {
 						my %hashgenes;
 						if (%{$self->genes}) {
 							%hashgenes = %{$self->genes};
 						}
-						my $page = get ('http://togows.dbcls.jp/entry/uniprot/'.$interactor.'/seq.json')
-							or next;
+						print "\tworking in : adding intermediate node\n";
+						print "\t\tworking in : looking for sequence\n";
+						my $page;
+						unless( $page= get ('http://togows.dbcls.jp/entry/uniprot/'.$interactor.'/seq.json') ) {
+							$error_control=1;
+							next;
+						}
 						my $ref_content	=	$json->decode($page);
 						my $seq			=	$ref_content->[0];
+						print "\t\tworking in : looking for KEGG id\n";
+						unless ($page = get ('http://togows.dbcls.jp/entry/uniprot/'.$interactor.'/dr.json') ) {
+							$error_control=1;
+							next;
+						}
+						$ref_content	=	$json->decode($page);
+						my $ref			=	$ref_content->[0];
+						my $keggref;
+						unless ($keggref = $ref->{KEGG}->[0]->[0] ) {
+							$error_control=1;
+							print "ERROR : Unable to find KEGG id\n";
+							next;
+						}
+						print "\t\t\tkegg id = $keggref\n";
+						($keggref) and ($keggref =~ s/^ath\://);
+						unless ($page = get('http://togows.dbcls.jp/entry/genes/ath:'.$keggref.'/pathways.json')) {
+							$error_control=1;
+							print "ERROR : Unable to fing KEGG pathway id\n";
+							next;
+						}
+						$ref_content	=	$json->decode($page);
+						$ref			=	$ref_content -> [0];
+						my @kegg_pathway_object_array;
+						foreach my $kegg_accesion (keys %{$ref}) {
+							push (@kegg_pathway_object_array, KEGG_Pathway->new(
+									'KEGG_id' => $kegg_accesion,
+									'KEGG_name' => $ref->{$kegg_accesion}
+								)
+							) or print "ERROR : Unable to create KEGG anotation for $kegg_accesion\n";
+						}
+						unless ($error_control==0) {
 
-						$hashgenes{$interactor} = gene-> new(
-							'UNIPROT_ID' => $interactor,
-							'SEQ' => $seq
-						) or die "ERROR : Couldn't create object gene for $interactor\n";
-
-						$self -> genes(\%hashgenes);
+							$hashgenes{$interactor} = gene-> new(
+								'UNIPROT_ID' => $interactor,
+								'SEQ' => $seq,
+								'KEGG_ID' => $keggref,
+								'PATHWAY' => \@kegg_pathway_object_array
+							) or die "ERROR : Couldn't create object gene for $interactor\n";
+							$self -> genes(\%hashgenes);
+						}
 					}
 				}
-				while (scalar(@interactors) > 1) {
-					my $gen1 = shift @interactors ;
-					$interactions{$gen1.':'.$interactors[0]} = interaction -> new(
-						'gene1' =>	$self->genes->{$gen1},
-						'gene2' =>	$self->genes->{$interactors[0]},
-						'id' =>		$gen1.':'.$interactors[0]
-					) or last;
+				unless ($error_control == 0) {
+
+					while (scalar(@interactors) > 1) {
+						my $gen1 = shift @interactors ;
+						$interactions{$gen1.':'.$interactors[0]} = interaction -> new(
+							'gene1' =>	$self->genes->{$gen1},
+							'gene2' =>	$self->genes->{$interactors[0]},
+							'id' =>		$gen1.':'.$interactors[0]
+						) or last;
+					}
 				}
 			}
 		}
 		$self -> joininteractions(%interactions);
-		foreach my $network (keys %{$self->networks}) {
-			print $self->networks->{$network}->network_id, "\n";
-			foreach my $interaction (keys %{$self->networks->{$network}->interaction}) {
-				print "\t",$self->networks->{$network}->interaction->{$interaction}->id, "\n" ;
+		if ($self->networks) {
+			foreach my $network (keys %{$self->networks}) {
+				print $self->networks->{$network}->network_id, "\n";
+				foreach my $interaction (keys %{$self->networks->{$network}->interaction}) {
+					print "\t",$self->networks->{$network}->interaction->{$interaction}->id, "\n" ;
+				}
 			}
 		}
 	}
 }
 
 sub joininteractions {
-
+	#
+	#	This method calls recursively itself to link all the diferent
+	#	interactions in a network-
+	#
 	my ($self, %interaction_hash) = @_ 	;
 
 	if (%interaction_hash) {
@@ -281,7 +370,8 @@ sub joininteractions {
 sub look4interactions {
 	if (@_) {
 		#
-		#	Recursive Function
+		#	This method links genes inside the dataset using, if necessary,
+		#	genes not present in the dataset, through recursive calling.
 		#
 
 		my ($self, $currentgene, $deepness)	=	@_;
@@ -349,6 +439,62 @@ sub look4interactions {
 		}
 	} else {
 		die "ERROR : No information to work with\n";
+	}
+}
+sub report_interactions {
+	#
+	#	Creates a report.
+	#
+	if (@_) {
+		my ($self, $fileout) = @_ ;
+		if (open OUTILE, '>'.$fileout) {
+
+			if ($self -> networks) {
+
+
+				print OUTILE "INTERACTION REPORT\n";
+
+				foreach my $network (sort keys %{$self->networks}) {
+					print OUTILE "\tNETWORK : $network\n";
+					foreach my $interaction (sort keys %{$self->networks->{$network}->interaction}) {
+						print OUTILE "\t\tINTERACTION : $interaction\n";
+						print OUTILE "\t\t\tGENE ID : ".$self->networks->{$network}->interaction->{$interaction}->gene1->UNIPROT_ID."\n";
+						if ($self->networks->{$network}->interaction->{$interaction}->gene1->PATHWAY){
+							print OUTILE "\t\t\t\tKEGG PATHWAY ANOTATION : \n";
+							foreach my $keggpathway (@{$self->networks->{$network}->interaction->{$interaction}->gene1->PATHWAY}){
+								print OUTILE "\t\t\t\t\t", $keggpathway->KEGG_name, "\n";
+							}
+						}
+						if ($self->networks->{$network}->interaction->{$interaction}->gene1->GO) {
+							print OUTILE "\t\t\t\tGO ONTOLOGY ANOTATION : \n";
+							foreach my $goterm (sort keys %{$self->networks->{$network}->interaction->{$interaction}->gene1->GO}) {
+								print OUTILE "\t\t\t\t\t", $self->networks->{$network}->interaction->{$interaction}->gene1->GO->{$goterm}->GO_id, " : ";
+								print OUTILE  $self->networks->{$network}->interaction->{$interaction}->gene1->GO->{$goterm}->GO_term, "\n";
+							}
+						}
+						print OUTILE "\t\t\tGENE ID : ".$self->networks->{$network}->interaction->{$interaction}->gene2->UNIPROT_ID."\n";
+						if ($self->networks->{$network}->interaction->{$interaction}->gene2->PATHWAY){
+							foreach my $keggpathway (@{$self->networks->{$network}->interaction->{$interaction}->gene2->PATHWAY}){
+								print OUTILE "\t\t\t\t", $keggpathway->KEGG_name, "\n";
+							}
+						}
+						if ($self->networks->{$network}->interaction->{$interaction}->gene2->GO) {
+							print OUTILE "\t\t\t\tGO ONTOLOGY ANOTATION : \n";
+							foreach my $goterm (sort keys %{$self->networks->{$network}->interaction->{$interaction}->gene2->GO}) {
+								print OUTILE "\t\t\t\t\t", $self->networks->{$network}->interaction->{$interaction}->gene2->GO->{$goterm}->GO_id, " : ";
+								print OUTILE  $self->networks->{$network}->interaction->{$interaction}->gene2->GO->{$goterm}->GO_term, "\n";
+							}
+						}
+
+					}
+					print OUTILE "\t\tGO TERMS :\n";
+					foreach my $goterm (sort keys %{$self -> networks->{$network}->go_anotation}) {
+						print OUTILE "\t\t\tGO : ".$self->networks->{$network}->go_anotation->{$goterm}->GO_id, "\n";
+						print OUTILE "\t\t\t\tProces : ".$self->networks->{$network}->go_anotation->{$goterm}->GO_term, "\n";
+					}
+				}
+			}
+		}
 	}
 }
 1;

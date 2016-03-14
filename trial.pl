@@ -6,8 +6,8 @@ use gene_library;
 my $gene_lib = gene_library->new(
 	'number_of_networks' => 0
 );
-#$gene_lib -> input_genes_from_kegg('kegg_ids.txt');
-$gene_lib -> open_gen_info ('gene_information_file.txt');
+$gene_lib -> input_genes_from_kegg('kegg_ids.txt');
+#$gene_lib -> open_gen_info ('gene_information_file.txt');
 # for (sort keys $gene_lib -> genes) {
 # 	print $_;
 # 	(defined $gene_lib -> genes->{$_}->PATHWAY->[0]) and
@@ -15,3 +15,5 @@ $gene_lib -> open_gen_info ('gene_information_file.txt');
 # 	print "\n";
 # }
 $gene_lib -> createnetworks;
+$gene_lib -> look4goanotation;
+$gene_lib -> report_interactions('interactions');

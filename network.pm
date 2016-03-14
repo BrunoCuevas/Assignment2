@@ -24,7 +24,7 @@ has 'network_id' => (
 );
 has 'go_anotation' => (
 	is => 'rw',
-	isa => 'ArrayRef[go]',
+	isa => 'HashRef[go]',
 	required => 0
 );
 has 'interaction' => (
